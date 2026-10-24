@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Koi Fish Pet
 // @namespace    koi-fish-pet
-// @version      1.1
+// @version      1.2
 // @description  A tiny koi pet that swims around every tab. Click it to change its colour. Grab it and it escapes.
 // @author       Minad Uddin
 // @license      MIT
@@ -10,8 +10,9 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @run-at       document-idle
-// @updateURL    https://raw.githubusercontent.com/minaduddin/Koi-fish-pet/main/koi-fish-pet.user.js
-// @downloadURL  https://raw.githubusercontent.com/minaduddin/Koi-fish-pet/main/koi-fish-pet.user.js
+// @homepageURL  https://github.com/minaduddin/Koi-Fish-Pet
+// @updateURL    https://raw.githubusercontent.com/minaduddin/Koi-Fish-Pet/main/koi-fish-pet.user.js
+// @downloadURL  https://raw.githubusercontent.com/minaduddin/Koi-Fish-Pet/main/koi-fish-pet.user.js
 // ==/UserScript==
 
 (function () {
@@ -85,6 +86,8 @@
     const MAX_HALF_W = 15 * FISH_SIZE;
     const CANVAS_PX = Math.max(260, Math.round(360 * FISH_SIZE));
     const WAVE_PER_SEG = 0.44;
+    const MAX_HEAD_BEND = 0.7;      // the head may point at most ~40° away from the body, so it never swims backwards
+    const MAX_JOINT = 0.5;          // max bend between body links, so the body never folds over itself
 
     const fishState = {
         canvas: null, ctx: null, off: null, offCtx: null, dpr: 1,
@@ -143,11 +146,9 @@
 
         if (s.dragging) {
             // Grabbed: the head follows the cursor, the fish thrashes about
-            const ox0 = head.x, oy0 = head.y, k = Math.min(1, dt * 10);
+            const k = Math.min(1, dt * 10);
             head.x += (s.cx - head.x) * k;
             head.y += (s.cy - head.y) * k;
-            const vx = (head.x - ox0) / Math.max(dt, 1e-3), vy = (head.y - oy0) / Math.max(dt, 1e-3);
-            if (Math.hypot(vx, vy) > 25) s.theta += wrapAngle(Math.atan2(vy, vx) - s.theta) * Math.min(1, dt * 5);
             s.omega = 0;
             s.hover += (0 - s.hover) * Math.min(1, dt * 4);
             s.effort += (2.2 - s.effort) * Math.min(1, dt * 10);
@@ -196,6 +197,13 @@
             target = clamp(target, -maxTurn, maxTurn);
             s.omega += (target - s.omega) * Math.min(1, dt * (2 + 8 * st));
             s.theta += s.omega * dt;
+            // Keep the heading in line with the body (the old cause of tail-first swimming at edges)
+            const bodyDir = Math.atan2(head.y - s.pts[1].y, head.x - s.pts[1].x);
+            const bend = wrapAngle(s.theta - bodyDir);
+            if (Math.abs(bend) > MAX_HEAD_BEND) {
+                s.theta = bodyDir + Math.sign(bend) * MAX_HEAD_BEND;
+                s.omega *= 0.5;
+            }
             if (roaming) {
                 head.x = clamp(head.x + Math.cos(s.theta) * speed * dt, 20, W - 20);
                 head.y = clamp(head.y + Math.sin(s.theta) * speed * dt, 20, H - 20);
@@ -220,11 +228,17 @@
         // Body follows the head
         for (let i = 1; i < SEGMENTS; i++) {
             const a = s.pts[i - 1], b = s.pts[i];
-            const dx = b.x - a.x, dy = b.y - a.y;
-            const d = Math.hypot(dx, dy) || 1;
-            b.x = a.x + (dx / d) * SEG_LEN;
-            b.y = a.y + (dy / d) * SEG_LEN;
+            let ang = Math.atan2(b.y - a.y, b.x - a.x);
+            if (i >= 2) {
+                const prev = s.pts[i - 2];
+                const ref = Math.atan2(a.y - prev.y, a.x - prev.x);
+                const dev = wrapAngle(ang - ref);
+                if (Math.abs(dev) > MAX_JOINT) ang = ref + Math.sign(dev) * MAX_JOINT;
+            }
+            b.x = a.x + Math.cos(ang) * SEG_LEN;
+            b.y = a.y + Math.sin(ang) * SEG_LEN;
         }
+        if (s.dragging) s.theta = Math.atan2(head.y - s.pts[1].y, head.x - s.pts[1].x);   // face where the body points
 
         if (s.mode2 === 'leave') {
             const tl = s.pts[SEGMENTS - 1], mg = 50;
@@ -556,6 +570,12 @@
         for (const p of s.pts) { cx += p.x; cy += p.y; }
         cx /= s.pts.length; cy /= s.pts.length;
         s.fleeAngle = Math.atan2(cy - y, cx - x) + (Math.random() - 0.5) * 0.5;
+        // Near an edge, dart back towards the middle instead of into the wall
+        const h = s.pts[0], W = window.innerWidth, H = window.innerHeight, m = CFG.edgeMargin * 0.6;
+        if (h.x < m || h.x > W - m || h.y < m || h.y > H - m) {
+            const toCentre = Math.atan2(H / 2 - h.y, W / 2 - h.x);
+            s.fleeAngle = toCentre + wrapAngle(s.fleeAngle - toCentre) * 0.4;
+        }
         s.curlSign = wrapAngle(s.fleeAngle - s.theta) >= 0 ? 1 : -1;
         s.sinceStartle = 0;
         s.startle = 1;
@@ -586,6 +606,9 @@
         s.dragging = false;
         document.documentElement.classList.remove('koi-drag');
         if (was) {
+            const h = s.pts[0], p = s.pts[1];
+            s.theta = Math.atan2(h.y - p.y, h.x - p.x);    // swim off head-first
+            s.omega = 0;
             s.suppressClick = true;
             setTimeout(() => { s.suppressClick = false; }, 120);
             disturb('grab');
