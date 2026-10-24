@@ -10,7 +10,7 @@ A tiny koi that swims around your browser tabs.
 ## Install
 
 1. Install [Tampermonkey](https://www.tampermonkey.net/) for your browser.
-2. Click this link: [Install Koi Fish Pet](https://raw.githubusercontent.com/minaduddin/Koi-fish-pet/main/koi-fish-pet.user.js)
+2. Click this link: [Install Koi Fish Pet](https://raw.githubusercontent.com/minaduddin/Koi-Fish-Pet/main/koi-fish-pet.user.js)
 3. Click **Install** in Tampermonkey.
 4. Open or refresh any website and the koi appears.
 
@@ -23,6 +23,12 @@ No data is collected or sent anywhere. The only thing saved is the fish's colour
 ## Disclaimer
 
 A fan-made project. Not affiliated with or endorsed by any company.
+
+## Changelog
+
+- 1.2 – smoother swimming: no more swimming backwards or body folding, darts away from edges
+- 1.1 – works on every website
+- 1.0 – first release
 
 ## License
 
