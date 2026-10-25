@@ -1,10 +1,12 @@
 # 🐟 Koi Fish Pet
 
-A tiny koi that swims around your browser tabs.
+A tiny koi that swims from tab to tab in your browser.
 
 - **Click it** to change its colour (a new colour every time)
 - **Grab and drag it**, and it escapes and hides for a few seconds
 - **Pester it too much** and it sulks off-screen for longer
+- **Every minute or two it swims off the edge** and turns up in the next tab you open
+- **Leave it alone in another tab** and it comes to find you
 - Hovers, makes ripples, glows and darts away when startled
 
 ## Install
@@ -26,6 +28,7 @@ A fan-made project. Not affiliated with or endorsed by any company.
 
 ## Changelog
 
+- 1.3 – swims from tab to tab
 - 1.2 – smoother swimming: no more swimming backwards or body folding, darts away from edges
 - 1.1 – works on every website
 - 1.0 – first release
