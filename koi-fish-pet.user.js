@@ -1,14 +1,16 @@
 // ==UserScript==
 // @name         Koi Fish Pet
 // @namespace    koi-fish-pet
-// @version      1.2
-// @description  A tiny koi pet that swims around every tab. Click it to change its colour. Grab it and it escapes.
+// @version      1.3
+// @description  A tiny koi pet that swims from tab to tab. Click it to change its colour. Grab it and it escapes.
 // @author       Minad Uddin
 // @license      MIT
 // @match        *://*/*
 // @noframes
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_saveTab
+// @grant        GM_getTabs
 // @run-at       document-idle
 // @homepageURL  https://github.com/minaduddin/Koi-Fish-Pet
 // @updateURL    https://raw.githubusercontent.com/minaduddin/Koi-Fish-Pet/main/koi-fish-pet.user.js
@@ -30,6 +32,17 @@
         hideSecs: 5, annoyLimit: 4, hideGrowth: 4, maxHide: 90, annoyReset: 40
     };
     const COLOR_KEY = 'koi-fish-pet-color';
+
+    // Tab to tab: only one tab holds the fish at a time
+    const TAB_KEY = 'koi-fish-pet-tab';
+    const TAB_ID = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const TRAVEL = {
+        minSecs: 60, maxSecs: 150,   // how often it sets off for another tab
+        pickupSecs: 20,              // if you don't switch tab in time, it swims back
+        visitSecs: 30,               // left alone in a background tab, it swims over to the tab you're on
+        staleSecs: 90                // a tab that stopped answering loses the fish
+    };
+    const nextTrip = () => TRAVEL.minSecs + Math.random() * (TRAVEL.maxSecs - TRAVEL.minSecs);
 
     // ---------- Helpers ----------
     const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -97,7 +110,7 @@
         fx: [], ripples: [], colorGlow: 0, glowCol: [255, 255, 255],
         effort: 1, hover: 0, pause: 0, idleTimer: 9, popTimer: 0,
         seed: Math.random() * 100,
-        mode2: 'swim', hideLeft: 0, hideFor: 6, exitAngle: 0, enterAngle: 0, annoy: 0, lastDisturb: -999,
+        mode2: 'away', travelTimer: nextTrip(), travelDir: 'right', hideLeft: 0, hideFor: 6, exitAngle: 0, enterAngle: 0, annoy: 0, lastDisturb: -999,
         down: null, dragging: false, suppressClick: false, cx: -999, cy: -999, handHover: false
     };
 
@@ -135,9 +148,16 @@
         s.sinceStartle += dt;
         const st = s.startle;
 
+        // Away: the fish is in another tab
+        if (s.mode2 === 'away') {
+            s.draw = [];
+            if (s.handHover) updateHandCursor();
+            return;
+        }
         // Hidden: wait off-screen, then sneak back in from a random edge
         if (s.mode2 === 'hidden') {
             s.draw = [];
+            if (s.handHover) updateHandCursor();
             s.hideLeft -= dt;
             if (s.hideLeft <= 0) beginReturn();
             return;
@@ -175,10 +195,20 @@
             }
             s.hover += ((s.pause > 0 ? 1 : 0) - s.hover) * Math.min(1, dt * 1.5);
 
+            // Now and then, set off for another tab (only if there is one)
+            if (roaming && st === 0 && s.pause <= 0) {
+                s.travelTimer -= dt;
+                if (s.travelTimer <= 0) {
+                    s.travelTimer = nextTrip();
+                    if (otherTabs > 0) beginTravel(Math.random() < 0.7 ? 'right' : 'left');
+                }
+            }
+
             // Speed: cruise, hover, startle burst then glide
             const cruise = CFG.speed * (0.85 + 0.15 * Math.sin(s.t * 0.6)) * (1 - 0.88 * s.hover);
             let speed = cruise * (1 + CFG.startleBurst * st * st);
             if (s.mode2 === 'leave') speed = CFG.speed * 4.2;
+            else if (s.mode2 === 'travel') speed = CFG.speed * 2.2;
             else if (s.mode2 === 'return') speed = CFG.speed * 1.7;
 
             // Steering limited by body length so the body never folds into a hairpin
@@ -187,7 +217,7 @@
             let target = (0.6 * Math.sin(s.t * 0.37 + s.seed) + 0.4 * Math.sin(s.t * 0.83 + s.seed * 2.3)) * CFG.wander * maxTurn;
             const m = CFG.edgeMargin;
             const edge = roaming ? Math.max(0, 1 - head.x / m, 1 - (W - head.x) / m, 1 - head.y / m, 1 - (H - head.y) / m) : 0;
-            if (s.mode2 === 'leave') target = clamp(wrapAngle(s.exitAngle - s.theta) * 4, -maxTurn, maxTurn);
+            if (s.mode2 === 'leave' || s.mode2 === 'travel') target = clamp(wrapAngle(s.exitAngle - s.theta) * 4, -maxTurn, maxTurn);
             else if (s.mode2 === 'return') target = clamp(wrapAngle(s.enterAngle - s.theta) * 2, -maxTurn, maxTurn) * 0.3;
             if (edge > 0) {
                 const toCentre = Math.atan2(H / 2 - head.y, W / 2 - head.x);
@@ -217,6 +247,7 @@
             if (st > 0.62) effTarget = 1.8;
             else if (st > 0.2) effTarget = 0.3;
             if (s.mode2 === 'leave') effTarget = 1.7;
+            else if (s.mode2 === 'travel') effTarget = 1.3;
             effTarget *= 1 - 0.65 * s.hover;
             s.effort += (effTarget - s.effort) * Math.min(1, dt * 10);
 
@@ -240,11 +271,11 @@
         }
         if (s.dragging) s.theta = Math.atan2(head.y - s.pts[1].y, head.x - s.pts[1].x);   // face where the body points
 
-        if (s.mode2 === 'leave') {
+        if (s.mode2 === 'leave' || s.mode2 === 'travel') {
             const tl = s.pts[SEGMENTS - 1], mg = 50;
             if (tl.x < -mg || tl.x > W + mg || tl.y < -mg || tl.y > H + mg) {
-                s.mode2 = 'hidden';
-                s.hideLeft = s.hideFor;
+                if (s.mode2 === 'travel') handOver(s.travelDir);
+                else { s.mode2 = 'hidden'; s.hideLeft = s.hideFor; }
                 s.draw = [];
             }
         } else if (s.mode2 === 'return') {
@@ -461,7 +492,7 @@
             const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
             last = now;
             updateFish(dt);
-            if (fishState.mode2 === 'hidden') canvas.style.display = 'none';
+            if (fishState.mode2 === 'hidden' || fishState.mode2 === 'away') canvas.style.display = 'none';
             else { canvas.style.display = 'block'; drawFish(); }
             requestAnimationFrame(frame);
         };
@@ -500,7 +531,7 @@
     // ---------- Interaction ----------
     function hitXY(x, y) {
         const s = fishState, pts = s.draw;
-        if (!pts.length || (s.mode2 !== 'swim' && s.mode2 !== 'return')) return false;
+        if (!pts.length || (s.mode2 !== 'swim' && s.mode2 !== 'return' && s.mode2 !== 'travel')) return false;
         const radius = MAX_HALF_W * 1.2 + 10;
         return pts.some((p) => Math.hypot(x - p.x, y - p.y) <= radius);
     }
@@ -547,9 +578,10 @@
         s.ripples.push({ x: h.x, y: h.y, age: 0 });
     }
 
-    function beginReturn() {
+    // edge: 0 left, 1 right, 2 top, 3 bottom (random if not given)
+    function beginReturn(edge) {
         const s = fishState, W = window.innerWidth, H = window.innerHeight, off = BODY_LEN + 40;
-        const e = Math.floor(Math.random() * 4), u = 0.2 + Math.random() * 0.6;
+        const e = edge ?? Math.floor(Math.random() * 4), u = 0.2 + Math.random() * 0.6;
         let x, y, th;
         if (e === 0) { x = -off; y = H * u; th = 0; }
         else if (e === 1) { x = W + off; y = H * u; th = Math.PI; }
@@ -641,7 +673,7 @@
             if (e.buttons === 0) s.down = null;
             else if (Math.hypot(e.clientX - s.down.x, e.clientY - s.down.y) > 6) {
                 s.dragging = true;
-                if (s.mode2 === 'return') s.mode2 = 'swim';
+                if (s.mode2 === 'return' || s.mode2 === 'travel') s.mode2 = 'swim';
                 s.startle = 0;
                 ensureCursorStyle();
                 document.documentElement.classList.add('koi-drag');
@@ -654,16 +686,95 @@
     window.addEventListener('click', (e) => {
         if (!swallow(e)) return;
         if (fishState.suppressClick) { fishState.suppressClick = false; return; }
+        if (fishState.mode2 === 'travel') fishState.mode2 = 'swim';   // clicking it cancels the trip
         changeColour();
         startleFish(e.clientX, e.clientY);
         disturb('click');
     }, true);
 
+    // ---------- Tab to tab ----------
+    let otherTabs = 0, iOwn = false;
+    let visibleSince = document.visibilityState === 'visible' ? Date.now() : 0;
+    const isVisible = () => document.visibilityState === 'visible';
+    const readTab = () => { try { return GM_getValue(TAB_KEY, null); } catch (e) { return null; } };
+    const writeTab = (v) => { try { GM_setValue(TAB_KEY, v); } catch (e) { /* ignore */ } };
+
+    function countTabs() {
+        try {
+            GM_getTabs((tabs) => { otherTabs = Math.max(0, Object.keys(tabs || {}).length - 1); });
+        } catch (e) { otherTabs = 0; }
+    }
+
+    function beginTravel(dir) {
+        const s = fishState;
+        s.travelDir = dir;
+        s.exitAngle = (dir === 'right' ? 0 : Math.PI) + (Math.random() - 0.5) * 0.3;
+        s.mode2 = 'travel';
+        s.pause = 0;
+    }
+
+    // Swam off the edge: leave this tab and wait for another tab to pick it up
+    function handOver(dir) {
+        iOwn = false;
+        fishState.mode2 = 'away';
+        writeTab({ owner: null, travel: dir, from: TAB_ID, ts: Date.now() });
+    }
+
+    // Take the fish into this tab and swim in from an edge (with the latest shared colour)
+    function claim(edge) {
+        const s = fishState;
+        iOwn = true;
+        writeTab({ owner: TAB_ID, ts: Date.now(), ownerVisible: isVisible() });
+        s.hsl = loadHsl();
+        s.target = paletteFrom(s.hsl);
+        s.col = { body: s.target.body.slice(), shadow: s.target.shadow.slice() };
+        s.fx = []; s.ripples = []; s.pause = 0; s.down = null; s.dragging = false;
+        s.travelTimer = nextTrip();
+        beginReturn(edge);
+    }
+
+    function tabTick() {
+        const s = fishState;
+        if (!s.pts.length) return;
+        const now = Date.now(), st = readTab();
+        const LEFT = 0, RIGHT = 1;
+
+        if (iOwn && (!st || st.owner !== TAB_ID)) iOwn = false;          // another tab took it
+        if (iOwn) {
+            writeTab({ owner: TAB_ID, ts: now, ownerVisible: isVisible() });   // heartbeat
+            return;
+        }
+        if (s.mode2 !== 'away') s.mode2 = 'away';
+        if (!isVisible()) return;
+
+        if (st && st.travel) {
+            if (st.from !== TAB_ID) claim(st.travel === 'right' ? LEFT : RIGHT);               // arrives from the opposite side
+            else if (now - st.ts > TRAVEL.pickupSecs * 1000) claim(st.travel === 'right' ? RIGHT : LEFT);   // nobody came: swims back
+        } else if (!st || !st.owner || now - st.ts > TRAVEL.staleSecs * 1000) {
+            claim();
+        } else if (!st.ownerVisible && now - visibleSince > TRAVEL.visitSecs * 1000) {
+            claim(Math.random() < 0.5 ? LEFT : RIGHT);   // it was left alone in a background tab: comes to find you
+        }
+    }
+
+    document.addEventListener('visibilitychange', () => {
+        if (isVisible()) visibleSince = Date.now();
+        tabTick();
+    });
+    window.addEventListener('pagehide', () => {
+        if (iOwn) writeTab({ owner: null, ts: Date.now() });   // closing or leaving the page frees the fish
+    });
+
     // ---------- Init ----------
     function init() {
         if (!document.body || document.contentType && !/html/i.test(document.contentType)) return;   // skip PDFs, raw files, etc.
         createFish();
+        try { GM_saveTab({ koi: true }); } catch (e) { /* ignore */ }
+        countTabs();
+        tabTick();
         setInterval(createFish, 2000);   // re-attach if the page rebuilds itself
+        setInterval(tabTick, 1000);
+        setInterval(countTabs, 5000);
     }
 
     if (document.body) init();
